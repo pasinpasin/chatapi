@@ -6,12 +6,6 @@ return [
     |--------------------------------------------------------------------------
     | Third Party Services
     |--------------------------------------------------------------------------
-    |
-    | This file is for storing the credentials for third party services such
-    | as Mailgun, Postmark, AWS and more. This file provides the de facto
-    | location for this type of information, allowing packages to have
-    | a conventional file to locate the various service credentials.
-    |
     */
 
     'postmark' => [
@@ -34,9 +28,16 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
-'groq' => [
-    'key'   => env('GROQ_API_KEY'),
-    'model' => env('GROQ_MODEL', 'llama-3.1-8b-instant'),
-],
+
+    'groq' => [
+        'key'   => env('GROQ_API_KEY'),
+        'model' => env('GROQ_MODEL', 'llama-3.1-8b-instant'),
+    ],
+
+    'whatsapp' => [
+        'token'             => env('WHATSAPP_TOKEN'),
+        'phone_number_id'   => env('WHATSAPP_PHONE_NUMBER_ID'),
+        'verify_token'      => env('WHATSAPP_VERIFY_TOKEN'),
+    ], // Kjo kllapë mbyll tani të gjithë skedarin saktë
 
 ];

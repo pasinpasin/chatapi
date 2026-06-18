@@ -85,4 +85,14 @@
     <input type="text" name="whatsapp_number" class="form-control" value="{{ old('whatsapp_number', $property->whatsapp_number ?? '') }}">
 </div>
 
+<div class="form-group">
+    <label>Ranking (Prioriteti)</label>
+    <input type="number" name="ranking" class="form-control" 
+        value="{{ old('ranking', $property->ranking ?? 0) }}" min="0">
+    <small class="text-muted">
+        Numri më i ulët = prioritet më i lartë. 
+        P.sh. 1 = ofrohet i pari, 2 = i dyti, etj. 0 = pa prioritet.
+    </small>
+</div>
+
 <hr>

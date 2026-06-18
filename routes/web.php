@@ -5,6 +5,7 @@ use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\IcalLinkController;
 use App\Http\Controllers\PointOfInterestController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\WhatsAppController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\PropertyController;
@@ -89,4 +90,8 @@ Route::get('/test-groq', function() {
     return response()->json(['result' => $result]);
 });
 
+
+
+Route::get('/webhook/whatsapp', [WhatsAppController::class, 'verify'])->name('whatsapp.verify');
+Route::post('/webhook/whatsapp', [WhatsAppController::class, 'webhook'])->name('whatsapp.webhook');
 require __DIR__.'/auth.php';

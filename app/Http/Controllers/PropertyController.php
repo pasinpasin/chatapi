@@ -69,7 +69,14 @@ class PropertyController extends Controller
             'rules' => 'nullable|string',
             'webchat_enabled' => 'boolean',
             'whatsapp_enabled' => 'boolean',
-            'whatsapp_number' => 'nullable|string|max:30',
+            'whatsapp_number'  => [
+            'nullable',
+            'string',
+            'max:30',
+            // Nese whatsapp_enabled eshte true, numri eshte i detyreshem
+            $request->boolean('whatsapp_enabled') ? 'required' : 'nullable',
+        ],
+            'ranking'          => 'nullable|integer|min:0', // shto kete
         ]);
     }
 

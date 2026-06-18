@@ -13,6 +13,7 @@ return Application::configure(basePath: dirname(__DIR__))
    ->withMiddleware(function (Middleware $middleware): void {
     $middleware->validateCsrfTokens(except: [
           'chat/*',
+          'webhook/whatsapp', // SHTO KËTË RRESHT DETYRIMISHT
     ]);
     
     $middleware->append(\Illuminate\Http\Middleware\HandleCors::class);
