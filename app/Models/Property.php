@@ -8,6 +8,15 @@ class Property extends Model
 {
     protected $guarded = [];
 
+    public const AMENITIES = [
+        'wifi' => 'Wi-Fi',
+        'parking' => 'Parking',
+        'breakfast' => 'Mëngjes (Breakfast)',
+        'ac' => 'Klimë / Air Conditioning (AC)',
+        'pool' => 'Pishinë (Pool)',
+        'pets' => 'Lejohen kafshët shtëpiake (Pets allowed)'
+    ];
+
     protected $casts = [
         'amenities' => 'array',
         'webchat_enabled' => 'boolean',

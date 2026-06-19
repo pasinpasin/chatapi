@@ -8,6 +8,7 @@ use App\Models\ChatMessage;
 use App\Services\GeminiService;
 use App\Services\AvailabilityService;
 use App\Services\GroqService;
+use App\Services\ChatMemoryService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -16,6 +17,7 @@ class ChatController extends Controller
      public function __construct(
         private GroqService $gemini, // e mbajme emrin per te mos ndryshuar gje tjeter
         private AvailabilityService $availability,
+        private ChatMemoryService $chatMemory,
     ) {}
 
     public function widget(Property $property)
@@ -39,7 +41,14 @@ public function message(Request $request, Property $property)
         return response()->json(['error' => 'Hapi 1 - Conversation: ' . $e->getMessage()], 500);
     }
 
-    // Hapi 2 - Ruaj mesazhin
+    // Hapi 2 - Përmbledhja dhe Marrja e Historikut (përpara se të ruajmë mesazhin e ri)
+    try {
+        $history = $this->chatMemory->summarizeAndGetHistory($conversation, 8);
+    } catch (\Exception $e) {
+        return response()->json(['error' => 'Hapi 2 - History & Summarization: ' . $e->getMessage()], 500);
+    }
+
+    // Hapi 3 - Ruaj mesazhin e ri të përdoruesit
     try {
         ChatMessage::create([
             'conversation_id' => $conversation->id,
@@ -47,40 +56,28 @@ public function message(Request $request, Property $property)
             'content'         => $request->message,
         ]);
     } catch (\Exception $e) {
-        return response()->json(['error' => 'Hapi 2 - ChatMessage: ' . $e->getMessage()], 500);
+        return response()->json(['error' => 'Hapi 3 - ChatMessage: ' . $e->getMessage()], 500);
     }
 
-    // Hapi 3 - History
+    // Hapi 4 - Availability & Memory
     try {
-        $history = $conversation->messages()
-            ->orderBy('created_at')
-            ->take(10)
-            ->get()
-            ->map(fn($m) => ['role' => $m->role, 'content' => $m->content])
-            ->toArray();
-    } catch (\Exception $e) {
-        return response()->json(['error' => 'Hapi 3 - History: ' . $e->getMessage()], 500);
-    }
-
-    // Hapi 4 - Availability
-    try {
-        $availabilityContext = $this->extractAvailabilityContext($request->message, $property);
+        $availabilityContext = $this->updateAndGetAvailability($request->message, $property, $conversation);
     } catch (\Exception $e) {
         return response()->json(['error' => 'Hapi 4 - Availability: ' . $e->getMessage()], 500);
     }
 
     // Hapi 5 - System Prompt
     try {
-        $systemPrompt = $this->buildSystemPrompt($property, $availabilityContext);
+        $systemPrompt = $this->buildSystemPrompt($property, $availabilityContext, $conversation);
     } catch (\Exception $e) {
         return response()->json(['error' => 'Hapi 5 - SystemPrompt: ' . $e->getMessage()], 500);
     }
 
-    // Hapi 6 - Gemini
+    // Hapi 6 - AI Call
     try {
         $aiResponse = $this->gemini->chat($systemPrompt, $history, $request->message);
     } catch (\Exception $e) {
-        return response()->json(['error' => 'Hapi 6 - Gemini: ' . $e->getMessage()], 500);
+        return response()->json(['error' => 'Hapi 6 - AI: ' . $e->getMessage()], 500);
     }
 
     // Hapi 7 - Ruaj pergjigjen
@@ -115,72 +112,101 @@ public function message(Request $request, Property $property)
             'customer_identifier'  => session()->getId(),
         ]);
     }
-private function extractAvailabilityContext(string $message, Property $property): ?array
-{
-    $months = [
-        'janar' => '01', 'shkurt' => '02', 'mars' => '03',
-        'prill' => '04', 'maj' => '05', 'qershor' => '06',
-        'korrik' => '07', 'gusht' => '08', 'shtator' => '09',
-        'tetor' => '10', 'nëntor' => '11', 'dhjetor' => '12',
-        'january' => '01', 'february' => '02', 'march' => '03',
-        'april' => '04', 'may' => '05', 'june' => '06',
-        'july' => '07', 'august' => '08', 'september' => '09',
-        'october' => '10', 'november' => '11', 'december' => '12',
-        'gennaio' => '01', 'febbraio' => '02', 'marzo' => '03',
-        'aprile' => '04', 'maggio' => '05', 'giugno' => '06',
-        'luglio' => '07', 'agosto' => '08', 'settembre' => '09',
-        'ottobre' => '10', 'novembre' => '11', 'dicembre' => '12',
-    ];
+    private function updateAndGetAvailability(string $message, Property $property, Conversation $conversation): ?array
+    {
+        $months = [
+            'janar' => '01', 'shkurt' => '02', 'mars' => '03',
+            'prill' => '04', 'maj' => '05', 'qershor' => '06',
+            'korrik' => '07', 'gusht' => '08', 'shtator' => '09',
+            'tetor' => '10', 'nëntor' => '11', 'dhjetor' => '12',
+            'january' => '01', 'february' => '02', 'march' => '03',
+            'april' => '04', 'may' => '05', 'june' => '06',
+            'july' => '07', 'august' => '08', 'september' => '09',
+            'october' => '10', 'november' => '11', 'december' => '12',
+            'gennaio' => '01', 'febbraio' => '02', 'marzo' => '03',
+            'aprile' => '04', 'maggio' => '05', 'giugno' => '06',
+            'luglio' => '07', 'agosto' => '08', 'settembre' => '09',
+            'ottobre' => '10', 'novembre' => '11', 'dicembre' => '12',
+        ];
 
-    $messageNorm = mb_strtolower($message);
-    $year = date('Y');
-    $foundDates = [];
+        $messageNorm = mb_strtolower($message);
+        $year = date('Y');
+        $foundDates = [];
 
-    // Pattern: "12 korrik" ose "12 july" ose "12 luglio"
-    foreach ($months as $monthName => $monthNum) {
-        if (preg_match_all('/(\d{1,2})\s+' . preg_quote($monthName, '/') . '(?:\s+(\d{4}))?/i', $messageNorm, $matches, PREG_SET_ORDER)) {
-            foreach ($matches as $match) {
-                $y = !empty($match[2]) ? $match[2] : $year;
-                $foundDates[] = $y . '-' . $monthNum . '-' . str_pad($match[1], 2, '0', STR_PAD_LEFT);
+        foreach ($months as $monthName => $monthNum) {
+            if (preg_match_all('/(\d{1,2})\s+' . preg_quote($monthName, '/') . '(?:\s+(\d{4}))?/i', $messageNorm, $matches, PREG_SET_ORDER)) {
+                foreach ($matches as $match) {
+                    $y = !empty($match[2]) ? $match[2] : $year;
+                    $foundDates[] = $y . '-' . $monthNum . '-' . str_pad($match[1], 2, '0', STR_PAD_LEFT);
+                }
             }
         }
-    }
 
-    // Pattern: "12/07" ose "12-07-2026"
-    if (preg_match_all('/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?/', $message, $matches, PREG_SET_ORDER)) {
-        foreach ($matches as $match) {
-            $y = !empty($match[3]) ? $match[3] : $year;
-            $foundDates[] = $y . '-' . str_pad($match[2], 2, '0', STR_PAD_LEFT) . '-' . str_pad($match[1], 2, '0', STR_PAD_LEFT);
+        if (preg_match_all('/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{4}))?/', $message, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $y = !empty($match[3]) ? $match[3] : $year;
+                $foundDates[] = $y . '-' . str_pad($match[2], 2, '0', STR_PAD_LEFT) . '-' . str_pad($match[1], 2, '0', STR_PAD_LEFT);
+            }
         }
-    }
 
-    $foundDates = array_unique($foundDates);
+        $foundDates = array_unique($foundDates);
+        $checkin = null;
+        $checkout = null;
 
-    if (count($foundDates) >= 2) {
-        try {
-            $result = $this->availability->checkAvailability(
-                $property,
-                $foundDates[0],
-                $foundDates[1]
-            );
-            return $result;
-        } catch (\Exception $e) {
-            return null;
+        if (count($foundDates) >= 2) {
+            $checkin = $foundDates[0];
+            $checkout = $foundDates[1];
+            
+            $conversation->update([
+                'last_checkin' => $checkin,
+                'last_checkout' => $checkout
+            ]);
+        } else {
+            $checkin = $conversation->last_checkin;
+            $checkout = $conversation->last_checkout;
         }
-    }
 
-    return null;
-}
-    private function buildSystemPrompt(Property $property, ?array $availability): string
+        if ($checkin && $checkout) {
+            try {
+                return $this->availability->checkAvailability($property, $checkin, $checkout);
+            } catch (\Exception $e) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+    private function buildSystemPrompt(Property $property, ?array $availability, ?Conversation $conversation = null): string
     {
-        $amenities = implode(', ', $property->amenities ?? []);
+        $amenityLabels = Property::AMENITIES;
+        $amenitiesMapped = [];
+        foreach ($property->amenities ?? [] as $key) {
+            $amenitiesMapped[] = $amenityLabels[$key] ?? $key;
+        }
+        $amenities = implode(', ', $amenitiesMapped);
         $pois      = $property->pointsOfInterest()
             ->get()
             ->map(fn($p) => "{$p->name} ({$p->type}) - {$p->distance_text} - {$p->gmaps_link}")
             ->join("\n");
 
+        $roomsInfo = $property->rooms->map(fn($r) => 
+            "- {$r->name} ({$r->type}): Çmimi bazë prej {$r->base_price}€/natë (Kapaciteti max: {$r->max_occupancy} persona). Përshkrimi: " . ($r->description ?: 'Nuk ka përshkrim shtesë.')
+        )->join("\n");
+
        $prompt = <<<PROMPT
 Ti je asistenti virtual i "{$property->name}", një {$property->type} në Shkodër, Shqipëri.
+
+INFORMACION I PRONËS (HOTELI NË TËRËSI):
+- Adresa: {$property->address}
+- Përshkrimi i Përgjithshëm: {$property->description}
+- Shërbimet/Pajisjet (Amenities): {$amenities}
+- Rregullat e Hotelit: {$property->rules}
+
+DHOMAT EKZISTUESE TE HOTELIT (ÇMIMET BAZË DHE PËRSHKRIMI):
+{$roomsInfo}
+
+PIKAT E INTERESIT AFËR:
+{$pois}
 
 RREGULL ABSOLUTISHT I DETYRUESHËM PËR GJUHËN:
 - Përgjigju GJITHMONË në të njëjtën gjuhë që shkruan klienti
@@ -190,7 +216,15 @@ RREGULL ABSOLUTISHT I DETYRUESHËM PËR GJUHËN:
 - KURRË mos përziej gjuhë të ndryshme në të njëjtën përgjigje
 - KURRË mos përdor fjalë sllave (jo: "kamër", "zdravo", etj.)
 - Për shqipen: përdor GJITHMONË "dhomë" (jo "kamër"), "mirëmëngjes" (jo "dobro jutro"), etj.
+
+RREGULLAT MBI INFORMACIONIN DHE PARANDALIMIN E HALUCINACIONEVE:
+- Mos shpik apo supozo ASNJËHERË detaje rreth dhomave (si pamja nga deti/mali/oborri, ballkoni, lloji i krevatit, etj.) ose hotelit nëse ato nuk janë të shkruara shprehimisht te përshkrimi i dhomës ose i hotelit më sipër.
+- Nëse klienti pyet për një detaj që nuk është i shkruar te përshkrimet e dhomave apo të hotelit, përgjigju me mirësjellje që nuk e disponon atë informacion për momentin dhe sugjero që të kontaktojnë stafin.
 PROMPT;
+
+        if ($conversation && $conversation->summary) {
+            $prompt .= "\n\nPËRMBLEDHJE E BISEDËS SË MËPARSHME (për referencë):\n{$conversation->summary}";
+        }
 
         // Shto kontekstin e disponueshmërisë nëse e kemi
         if ($availability !== null) {

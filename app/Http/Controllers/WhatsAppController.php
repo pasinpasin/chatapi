@@ -8,6 +8,7 @@ use App\Models\ChatMessage;
 use App\Services\WhatsAppService;
 use App\Services\GroqService;
 use App\Services\AvailabilityService;
+use App\Services\ChatMemoryService;
 use Illuminate\Http\Request;
 
 class WhatsAppController extends Controller
@@ -16,6 +17,7 @@ class WhatsAppController extends Controller
         private WhatsAppService $whatsapp,
         private GroqService $groq,
         private AvailabilityService $availability,
+        private ChatMemoryService $chatMemory,
     ) {}
 
     /**
@@ -112,6 +114,22 @@ if ($properties->count() === 1) {
             ]
         );
 
+        // Merr historikun dhe përmbledh nëse kalohet numri limit i mesazheve (p.sh. 12)
+        try {
+            $history = $this->chatMemory->summarizeAndGetHistory($conversation, 12);
+        } catch (\Exception $e) {
+            \Log::error('Gabim gjatë summarization në WhatsApp: ' . $e->getMessage());
+            // Fallback nëse dështon shërbimi i përmbledhjes
+            $history = $conversation->messages()
+                ->where('created_at', '>=', now()->subDays(7))
+                ->latest()
+                ->take(12)
+                ->get()
+                ->reverse()
+                ->map(fn($m) => ['role' => $m->role, 'content' => $m->content])
+                ->toArray();
+        }
+
         // Ruaj mesazhin e klientit
         ChatMessage::create([
             'conversation_id' => $conversation->id,
@@ -119,19 +137,11 @@ if ($properties->count() === 1) {
             'content'         => $text,
         ]);
 
-        // Merr historikun
-        $history = $conversation->messages()
-            ->orderBy('created_at')
-            ->take(10)
-            ->get()
-            ->map(fn($m) => ['role' => $m->role, 'content' => $m->content])
-            ->toArray();
-
-        // Kontrollo disponueshmërinë
-        $availabilityContext = $this->extractAvailabilityContext($text, $property);
+        // Kontrollo disponueshmërinë dhe përditëso datat në conversation
+        $availabilityContext = $this->updateAndGetAvailability($text, $property, $conversation);
 
         // Nderto system prompt
-        $systemPrompt = $this->buildSystemPrompt($property, $availabilityContext);
+        $systemPrompt = $this->buildSystemPrompt($property, $availabilityContext, $conversation);
 
         // Thirr AI
         try {
@@ -156,7 +166,7 @@ if ($properties->count() === 1) {
         return response('ok', 200);
     }
 
-    private function extractAvailabilityContext(string $message, Property $property): ?array
+    private function updateAndGetAvailability(string $message, Property $property, Conversation $conversation): ?array
     {
         $months = [
             'janar' => '01', 'shkurt' => '02', 'mars' => '03',
@@ -182,9 +192,27 @@ if ($properties->count() === 1) {
             }
         }
 
+        $checkin = null;
+        $checkout = null;
+
         if (count($foundDates) >= 2) {
+            $checkin = $foundDates[0];
+            $checkout = $foundDates[1];
+            
+            // Ruajmë datat e reja në conversation për memorje
+            $conversation->update([
+                'last_checkin' => $checkin,
+                'last_checkout' => $checkout
+            ]);
+        } else {
+            // Nëse nuk ka data në mesazh, i marrim nga memoria e bisedës
+            $checkin = $conversation->last_checkin;
+            $checkout = $conversation->last_checkout;
+        }
+
+        if ($checkin && $checkout) {
             try {
-                return $this->availability->checkAvailability($property, $foundDates[0], $foundDates[1]);
+                return $this->availability->checkAvailability($property, $checkin, $checkout);
             } catch (\Exception $e) {
                 return null;
             }
@@ -193,13 +221,22 @@ if ($properties->count() === 1) {
         return null;
     }
 
-    private function buildSystemPrompt(Property $property, ?array $availability): string
+    private function buildSystemPrompt(Property $property, ?array $availability, ?Conversation $conversation = null): string
     {
-        $amenities = implode(', ', $property->amenities ?? []);
+        $amenityLabels = Property::AMENITIES;
+        $amenitiesMapped = [];
+        foreach ($property->amenities ?? [] as $key) {
+            $amenitiesMapped[] = $amenityLabels[$key] ?? $key;
+        }
+        $amenities = implode(', ', $amenitiesMapped);
         $pois      = $property->pointsOfInterest()
             ->get()
             ->map(fn($p) => "{$p->name} ({$p->type}) - {$p->distance_text} - {$p->gmaps_link}")
             ->join("\n");
+
+        $roomsInfo = $property->rooms->map(fn($r) => 
+            "- {$r->name} ({$r->type}): Çmimi bazë prej {$r->base_price}€/natë (Kapaciteti max: {$r->max_occupancy} persona). Përshkrimi: " . ($r->description ?: 'Nuk ka përshkrim shtesë.')
+        )->join("\n");
 
         $prompt = <<<PROMPT
 Ti je asistenti virtual i "{$property->name}", një {$property->type} në Shkodër, Shqipëri.
@@ -210,6 +247,8 @@ INFORMACION I PRONËS:
 - Përshkrimi: {$property->description}
 - Pajisjet: {$amenities}
 - Rregullat: {$property->rules}
+- Dhomat, çmimet bazë dhe përshkrimi:
+{$roomsInfo}
 
 PIKAT E INTERESIT AFËR:
 {$pois}
@@ -220,7 +259,15 @@ SJELLJA JOTE:
 - Mos përdor formatim të tepërt (jo tabela, jo lista të gjata)
 - Nëse klienti pyet për rezervim, kërko datat check-in dhe check-out
 - Për rezervime finale, thuaj që stafi do kontaktojë brenda 24 orësh
+
+RREGULLAT MBI INFORMACIONIN DHE PARANDALIMIN E HALUCINACIONEVE:
+- Mos shpik apo supozo ASNJËHERË detaje rreth dhomave (si pamja nga deti/mali/oborri, ballkoni, lloji i krevatit, etj.) nëse ato nuk janë të shkruara shprehimisht te përshkrimi i dhomës ose i hotelit më sipër.
+- Nëse klienti pyet për një detaj që nuk është i shkruar te përshkrimi i dhomave (p.sh. pamja e dhomës), përgjigju me mirësjellje që nuk e disponon atë informacion për momentin dhe sugjero që të kontaktojnë stafin ose të pyesin kur të mbërrijnë.
 PROMPT;
+
+        if ($conversation && $conversation->summary) {
+            $prompt .= "\n\nPËRMBLEDHJE E BISEDËS SË MËPARSHME (për referencë):\n{$conversation->summary}";
+        }
 
         if ($availability !== null) {
             if ($availability['available']) {

@@ -1,6 +1,6 @@
 @php
     $property = $property ?? null;
-    $amenitiesList = ['wifi' => 'Wi-Fi', 'parking' => 'Parking', 'breakfast' => 'Mëngjes', 'ac' => 'Klimë', 'pool' => 'Pishinë', 'pets' => 'Lejohen kafshët'];
+    $amenitiesList = \App\Models\Property::AMENITIES;
     $selectedAmenities = old('amenities', $property->amenities ?? []);
 @endphp
 
