@@ -13,7 +13,7 @@ class GroqService
     public function __construct()
     {
         $this->apiKey = config('services.groq.key');
-        $this->model  = config('services.groq.model', 'llama-3.1-8b-instant');
+        $this->model = config('services.groq.model', 'llama-3.1-8b-instant');
     }
 
     public function chat(string $systemPrompt, array $history, string $userMessage): string
@@ -57,6 +57,10 @@ class GroqService
         }
 
         $data = $response->json();
+       \Log::info('GROQ RESPONSE', [
+    'model'    => $this->model,
+    'response' => $data['choices'][0]['message']['content'] ?? 'empty',
+]);
 
         return $data['choices'][0]['message']['content']
             ?? 'Na vjen keq, nuk mund të përgjigjem tani.';
