@@ -61,11 +61,12 @@ class RoomController extends Controller
     private function validateData(Request $request)
     {
         return $request->validate([
-            'name' => 'required|string|max:255',
-            'type' => 'nullable|string|max:100',
+            'name'          => 'required|string|max:255',
+            'type'          => 'nullable|string|max:100',
             'max_occupancy' => 'required|integer|min:1',
-            'description' => 'nullable|string',
-            'base_price' => 'required|numeric|min:0',
+            'description'   => 'nullable|string',
+            'base_price'    => 'required|numeric|min:0',
+            'booking_url'   => 'nullable|url|max:1000',
         ]);
     }
 

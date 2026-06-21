@@ -22,8 +22,8 @@ class PropertyController extends Controller
     public function store(Request $request)
     {
         $validated = $this->validateData($request);
-        $validated['slug'] = Str::slug($validated['name']) . '-' . Str::random(5);
-        $validated['user_id'] = auth()->id();
+        $validated['slug']      = Str::slug($validated['name']) . '-' . Str::random(5);
+        $validated['user_id']   = auth()->id();
         $validated['amenities'] = $this->parseAmenities($request);
 
         Property::create($validated);
@@ -60,29 +60,28 @@ class PropertyController extends Controller
     private function validateData(Request $request)
     {
         return $request->validate([
-            'name' => 'required|string|max:255',
-            'type' => 'required|in:hotel,vila,bnb',
-            'address' => 'nullable|string|max:255',
-            'lat' => 'nullable|numeric',
-            'lng' => 'nullable|numeric',
-            'description' => 'nullable|string',
-            'rules' => 'nullable|string',
-            'webchat_enabled' => 'boolean',
+            'name'             => 'required|string|max:255',
+            'type'             => 'required|in:hotel,vila,bnb',
+            'address'          => 'nullable|string|max:255',
+            'lat'              => 'nullable|numeric',
+            'lng'              => 'nullable|numeric',
+            'description'      => 'nullable|string',
+            'rules'            => 'nullable|string',
+            'webchat_enabled'  => 'boolean',
             'whatsapp_enabled' => 'boolean',
             'whatsapp_number'  => [
-            'nullable',
-            'string',
-            'max:30',
-            // Nese whatsapp_enabled eshte true, numri eshte i detyreshem
-            $request->boolean('whatsapp_enabled') ? 'required' : 'nullable',
-        ],
-            'ranking'          => 'nullable|integer|min:0', // shto kete
+                'nullable',
+                'string',
+                'max:30',
+                $request->boolean('whatsapp_enabled') ? 'required' : 'nullable',
+            ],
+            'booking_url'      => 'nullable|url|max:1000',
+            'ranking'          => 'nullable|integer|min:0',
         ]);
     }
 
     private function parseAmenities(Request $request)
     {
-        // checkboxes vijne si array i amenities[]
         return $request->input('amenities', []);
     }
 

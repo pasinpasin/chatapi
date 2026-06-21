@@ -21,6 +21,7 @@
                     <th>Lloji</th>
                     <th>Adresa</th>
                     <th>Dhoma</th>
+                    <th>slug</th>
                     <th>Web Chat</th>
                     <th>WhatsApp</th>
                     <th>Veprime</th>
@@ -33,6 +34,7 @@
                     <td>{{ ucfirst($property->type) }}</td>
                     <td>{{ $property->address }}</td>
                     <td>{{ $property->rooms()->count() }}</td>
+                    <td>{{ $property->slug }}</td>
                     <td>
                         @if($property->webchat_enabled)
                             <span class="badge bg-success">Aktiv</span>
@@ -73,7 +75,7 @@
     <i class="fas fa-code"></i>
 </button>
 </td>
-                    
+
                 </tr>
                 @endforeach
             </tbody>

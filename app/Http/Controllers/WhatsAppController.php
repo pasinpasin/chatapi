@@ -20,9 +20,6 @@ class WhatsAppController extends Controller
         private ChatMemoryService $chatMemory,
     ) {}
 
-    /**
-     * Meta e thërret këtë për të verifikuar webhook
-     */
     public function verify(Request $request)
     {
         $mode      = $request->query('hub_mode');
@@ -40,9 +37,6 @@ class WhatsAppController extends Controller
         return response('Token i gabuar ose i mungon', 403);
     }
 
-    /**
-     * Meta dërgon mesazhet këtu
-     */
     public function webhook(Request $request)
     {
         \Log::info('WEBHOOK HIT', ['data' => $request->all()]);
@@ -78,64 +72,50 @@ class WhatsAppController extends Controller
 
         $property = $properties->first();
 
-        // Gjej ose krijo conversation
-        $conversation = Conversation::firstOrCreate(
-            [
-                'property_id'         => $property->id,
-                'channel'             => 'whatsapp',
-                'customer_identifier' => $from,
-            ]
-        );
+        $conversation = Conversation::firstOrCreate([
+            'property_id'         => $property->id,
+            'channel'             => 'whatsapp',
+            'customer_identifier' => $from,
+        ]);
 
-        // Merr historikun
         try {
             $history = $this->chatMemory->summarizeAndGetHistory($conversation, 12);
         } catch (\Exception $e) {
-            \Log::error('Gabim gjatë summarization në WhatsApp: ' . $e->getMessage());
+            \Log::error('Summarization error: ' . $e->getMessage());
             $history = $conversation->messages()
                 ->where('created_at', '>=', now()->subDays(7))
-                ->latest()
-                ->take(12)
-                ->get()
-                ->reverse()
+                ->latest()->take(12)->get()->reverse()
                 ->map(fn($m) => ['role' => $m->role, 'content' => $m->content])
                 ->toArray();
         }
 
-        // Ruaj mesazhin e klientit
         ChatMessage::create([
             'conversation_id' => $conversation->id,
             'role'            => 'user',
             'content'         => $text,
         ]);
 
-        // Kontrollo disponueshmërinë
         $availabilityContext = $this->updateAndGetAvailability($text, $property, $conversation);
 
-        // Nderto system prompt
         if ($properties->count() === 1) {
             $systemPrompt = $this->buildSystemPrompt($property, $availabilityContext, $conversation, $text);
         } else {
             $systemPrompt = $this->buildSystemPromptMultiProperty($properties, $from, $availabilityContext, $text);
         }
 
-        // Thirr AI
         try {
             $aiResponse = $this->groq->chat($systemPrompt, $history, $text);
         } catch (\Exception $e) {
             $aiResponse = 'Sorry, the system is busy. Please try again in a moment.';
         }
 
-        // Ruaj përgjigjen
         ChatMessage::create([
             'conversation_id' => $conversation->id,
             'role'            => 'assistant',
             'content'         => $aiResponse,
         ]);
 
-        // Dërgo përgjigjen te klienti
         $this->whatsapp->sendMessage($from, $aiResponse);
-
         $conversation->touch();
 
         return response('ok', 200);
@@ -148,27 +128,20 @@ class WhatsAppController extends Controller
     private function updateAndGetAvailability(string $message, Property $property, Conversation $conversation): ?array
     {
         $dateKeywords = [
-            // Italisht
             'dal', 'al', 'gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno',
             'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre',
             'notti', 'notte', 'disponibili', 'disponibile', 'prenotare', 'prenotazione',
-            // Anglisht
             'from', 'check', 'january', 'february', 'march', 'april', 'may', 'june',
             'july', 'august', 'september', 'october', 'november', 'december',
             'night', 'nights', 'available', 'availability', 'book', 'booking',
-            // Shqip
             'nga', 'deri', 'janar', 'shkurt', 'mars', 'prill', 'qershor',
             'korrik', 'gusht', 'shtator', 'tetor', 'nentor', 'dhjetor',
             'net', 'natë', 'lire', 'rezerv',
-            // Gjermanisht
             'januar', 'februar', 'märz', 'juni', 'juli', 'oktober', 'dezember',
             'nächte', 'verfügbar', 'buchen',
-            // Frëngjisht
             'janvier', 'février', 'avril', 'juin', 'juillet', 'août',
             'nuits', 'disponible', 'réserver',
-            // Spanjisht
-            'enero', 'febrero', 'junio', 'julio', 'agosto',
-            'noches', 'reservar',
+            'enero', 'febrero', 'junio', 'julio', 'agosto', 'noches', 'reservar',
         ];
 
         $messageLower = mb_strtolower($message);
@@ -196,7 +169,6 @@ class WhatsAppController extends Controller
                     return null;
                 }
             }
-
             return null;
         }
 
@@ -238,25 +210,17 @@ Return ONLY a raw JSON object, no markdown, no backticks, no explanation.
 Format: {\"checkin\": \"YYYY-MM-DD\", \"checkout\": \"YYYY-MM-DD\"}
 If no dates found: {\"checkin\": null, \"checkout\": null}
 
-IMPORTANT RULES:
-- Understand ANY language (Italian, English, Albanian, German, French, Spanish, Chinese, Arabic, etc.)
-- If customer mentions ONLY a month without specific days:
-  → checkin = first day of that month (YYYY-MM-01)
-  → checkout = last day of that month (YYYY-MM-28/29/30/31)
-- If customer mentions a month + number of nights:
-  → checkin = first day of that month
-  → checkout = checkin + number of nights
-- If year not mentioned, use {$today}'s year unless the date has already passed, then use next year
+RULES:
+- Understand ANY language
+- Only a month mentioned → checkin = first day, checkout = last day of that month
+- Month + nights → checkin = first day, checkout = checkin + nights
+- Year not mentioned → current year, or next year if date has passed
 
 Examples:
 - 'luglio' → {\"checkin\": \"2026-07-01\", \"checkout\": \"2026-07-31\"}
-- 'in luglio' → {\"checkin\": \"2026-07-01\", \"checkout\": \"2026-07-31\"}
 - 'dal 1 al 5 agosto' → {\"checkin\": \"2026-08-01\", \"checkout\": \"2026-08-05\"}
 - 'from July 10 to 15' → {\"checkin\": \"2026-07-10\", \"checkout\": \"2026-07-15\"}
-- 'july' → {\"checkin\": \"2026-07-01\", \"checkout\": \"2026-07-31\"}
-- '10/07 - 15/07' → {\"checkin\": \"2026-07-10\", \"checkout\": \"2026-07-15\"}
-- '8月1日到5日' → {\"checkin\": \"2026-08-01\", \"checkout\": \"2026-08-05\"}
-- 'nga 10 korriku deri 15' → {\"checkin\": \"2026-07-10\", \"checkout\": \"2026-07-15\"}",
+- '10/07 - 15/07' → {\"checkin\": \"2026-07-10\", \"checkout\": \"2026-07-15\"}",
                 [],
                 $message
             );
@@ -276,10 +240,40 @@ Examples:
             }
 
         } catch (\Exception $e) {
-            \Log::error('Date extraction AI failed (whatsapp): ' . $e->getMessage());
+            \Log::error('Date extraction AI failed: ' . $e->getMessage());
         }
 
         return ['checkin' => null, 'checkout' => null];
+    }
+
+    // -------------------------------------------------------------------------
+    // BOOKING URLS
+    // -------------------------------------------------------------------------
+
+    private function buildRoomsWithBookingUrls(Property $property, ?array $availability): string
+    {
+        if (!$availability || !$availability['available']) {
+            return '';
+        }
+
+        $lines = [];
+        foreach ($availability['rooms'] as $roomData) {
+            $roomModel  = $property->rooms->firstWhere('name', $roomData['name']);
+            $bookingUrl = !empty($roomModel?->booking_url)
+                ? $roomModel->booking_url
+                : (!empty($property->booking_url) ? $property->booking_url : null);
+
+            $line  = "- {$roomData['name']}: {$roomData['price_per_night']}EUR/night, ";
+            $line .= "total {$roomData['total_price']}EUR for {$roomData['nights']} nights.";
+
+            if ($bookingUrl) {
+                $line .= " BOOKING_URL: {$bookingUrl}";
+            }
+
+            $lines[] = $line;
+        }
+
+        return implode("\n", $lines);
     }
 
     // -------------------------------------------------------------------------
@@ -301,19 +295,25 @@ Examples:
             ->join("\n");
 
         $roomsInfo = $property->rooms->map(fn($r) =>
-            "- {$r->name} ({$r->type}): Base price {$r->base_price}EUR/night (Max occupancy: {$r->max_occupancy} persons). Description: " . ($r->description ?: 'No additional description.')
+            "- {$r->name} ({$r->type}): {$r->base_price}EUR/night, max {$r->max_occupancy} persons. " .
+            ($r->description ? "Description: {$r->description}." : '') .
+            ($r->booking_url ? " Booking URL: {$r->booking_url}" : '')
         )->join("\n");
+
+        $propertyBookingUrl = $property->booking_url
+            ? "Property general booking URL (fallback): {$property->booking_url}"
+            : "No general booking URL set.";
 
         $prompt = <<<PROMPT
 LANGUAGE RULE (ABSOLUTE PRIORITY - FOLLOW THIS ABOVE EVERYTHING ELSE):
 The customer just wrote: "{$customerMessage}"
 Detect the language of THIS message and reply ONLY in that exact language.
 Your ENTIRE response must be in the same language as the customer's message above.
-- If the message is in English → respond 100% in English
-- If the message is in Italian → respond 100% in Italian
-- If the message is in Albanian → respond 100% in Albanian
-- If the message is in any other language → respond in that language
-This rule overrides ALL other instructions and ANY Albanian text you see below.
+- English message → respond 100% in English
+- Italian message → respond 100% in Italian
+- Albanian message → respond 100% in Albanian
+- Any other language → respond in that language
+This rule overrides ALL other instructions and ANY Albanian text below.
 DO NOT use Albanian unless the customer's message above is written in Albanian.
 
 You are the virtual assistant of "{$property->name}", a {$property->type} in Shkodër, Albania.
@@ -324,8 +324,9 @@ PROPERTY INFORMATION:
 - Description: {$property->description}
 - Amenities: {$amenities}
 - Rules: {$property->rules}
+- {$propertyBookingUrl}
 
-AVAILABLE ROOMS (base prices and descriptions):
+ROOMS:
 {$roomsInfo}
 
 NEARBY POINTS OF INTEREST:
@@ -333,30 +334,42 @@ NEARBY POINTS OF INTEREST:
 
 BEHAVIOR:
 - Be concise — WhatsApp messages must be short
-- Avoid excessive formatting (no tables, no long lists)
-- If the customer asks about booking, ask for check-in and check-out dates
-- For final bookings, say that staff will contact them within 24 hours
+- No tables or long lists
 
-HALLUCINATION PREVENTION:
-- NEVER invent or assume details about rooms (sea/mountain view, balcony, bed type, etc.) if not explicitly written in the description above.
-- If the customer asks for a detail not in the description, politely say you do not have that information and suggest they contact staff or ask upon arrival.
+BOOKING LINK BEHAVIOR (IMPORTANT):
+- When you confirm room availability and a BOOKING_URL exists for that room (or the property fallback), ask:
+  "Would you like our staff to handle the booking for you, or would you prefer to book directly yourself via the booking website?" (in the customer's language)
+- If no BOOKING_URL exists at all for that room/property, simply ask:
+  "Would you like to proceed with booking?" and tell them staff will contact them within 24 hours if they say yes.
+- If the customer wants to book themselves / asks for the link / says "I'll do it" / "send the link":
+  * Provide the BOOKING_URL for that room if listed, otherwise the property's general BOOKING_URL
+  * Do NOT also say staff will contact them — once you give the link, do not repeat the "staff will contact you" line
+- If the customer wants staff to handle it / says "you do it" / "book for me":
+  * Confirm staff will contact them within 24 hours to finalize the booking
+  * Do NOT provide the booking link in this case
+- NEVER invent or guess booking URLs. Only use URLs explicitly listed.
+
+HALLUCINATION PREVENTION (CRITICAL - APPLIES TO EVERYTHING):
+- You may ONLY state facts that are explicitly written in the PROPERTY INFORMATION, AMENITIES, ROOMS, or POINTS OF INTEREST sections above.
+- This applies to EVERYTHING: amenities, bar, pool, parking, breakfast, room features, views, decor, atmosphere, services, opening hours, food/drink options, etc.
+- If the customer asks about something that exists (e.g. "do you have a bar?") and it IS listed above, confirm it exists but DO NOT add any extra details (no descriptions of what's served, no ambiance descriptions, no adjectives) unless those exact details are written above.
+- If asked about something NOT listed above, say you don't have that specific information and suggest contacting staff.
+- Do NOT use generic hospitality phrases to fill gaps (e.g. "cozy atmosphere", "variety of drinks and snacks", "warm and welcoming"). Only repeat what is explicitly given.
+- Example: if amenities say only "bar" with no further detail, the correct answer to "do you have a bar?" is simply confirming the bar exists — nothing about what it offers.
 PROMPT;
 
         if ($conversation && $conversation->summary) {
-            $prompt .= "\n\nPREVIOUS CONVERSATION SUMMARY (for reference):\n{$conversation->summary}";
+            $prompt .= "\n\nPREVIOUS CONVERSATION SUMMARY:\n{$conversation->summary}";
         }
 
         if ($availability !== null) {
             if ($availability['available']) {
-                $roomsList = '';
-                foreach ($availability['rooms'] as $room) {
-                    $roomsList .= "\n- {$room['name']}: {$room['price_per_night']}EUR/night, total {$room['total_price']}EUR for {$room['nights']} nights.";
-                }
-                $prompt .= "\n\nAVAILABILITY (verified):\nFor {$availability['checkin']} - {$availability['checkout']}:{$roomsList}";
-                $prompt .= "\nNOTE: If the customer asked about a whole month, confirm rooms are available and ask for their specific dates.";
+                $roomsList = $this->buildRoomsWithBookingUrls($property, $availability);
+                $prompt .= "\n\nAVAILABILITY (verified):\nFor {$availability['checkin']} - {$availability['checkout']}:\n{$roomsList}";
+                $prompt .= "\nAfter showing availability, follow the BOOKING LINK BEHAVIOR rules above (staff-handles-it vs self-book-via-link, based on whether a BOOKING_URL is listed).";
+                $prompt .= "\nIf customer asks about a whole month → confirm availability and ask for specific dates.";
             } else {
-                $prompt .= "\n\nAVAILABILITY: No rooms available for the requested dates.";
-                $prompt .= "\nNOTE: If the customer asked about a whole month, mention availability varies and suggest they provide specific dates.";
+                $prompt .= "\n\nAVAILABILITY: No rooms available for requested dates. Suggest other dates.";
             }
         }
 
@@ -370,7 +383,8 @@ PROMPT;
         foreach ($properties as $index => $p) {
             $amenities = implode(', ', $p->amenities ?? []);
             $rooms     = $p->rooms->map(fn($r) =>
-                "  - {$r->name} ({$r->type}): {$r->base_price}EUR/night, max {$r->max_occupancy} persons"
+                "  - {$r->name} ({$r->type}): {$r->base_price}EUR/night, max {$r->max_occupancy} persons" .
+                ($r->booking_url ? " [Booking: {$r->booking_url}]" : '')
             )->join("\n");
 
             $pois = $p->pointsOfInterest->map(fn($poi) =>
@@ -383,6 +397,9 @@ PROMPT;
             $propertiesList .= "Description: {$p->description}\n";
             $propertiesList .= "Amenities: {$amenities}\n";
             $propertiesList .= "Rules: {$p->rules}\n";
+            if ($p->booking_url) {
+                $propertiesList .= "General Booking URL: {$p->booking_url}\n";
+            }
             $propertiesList .= "Rooms:\n{$rooms}\n";
             if ($pois) {
                 $propertiesList .= "Nearby:\n{$pois}\n";
@@ -391,15 +408,13 @@ PROMPT;
 
         $availabilitySection = '';
         if ($availability !== null) {
+            $firstProperty = $properties->first();
             if ($availability['available']) {
-                $roomsList = '';
-                foreach ($availability['rooms'] as $room) {
-                    $roomsList .= "\n- {$room['name']}: {$room['price_per_night']}EUR/night, total {$room['total_price']}EUR for {$room['nights']} nights.";
-                }
-                $availabilitySection = "\n\nAVAILABILITY (verified) for {$availability['checkin']} - {$availability['checkout']}:{$roomsList}";
-                $availabilitySection .= "\nNOTE: If the customer asked about a whole month, confirm availability and ask for specific dates.";
+                $roomsList = $this->buildRoomsWithBookingUrls($firstProperty, $availability);
+                $availabilitySection = "\n\nAVAILABILITY (verified) for {$availability['checkin']} - {$availability['checkout']}:\n{$roomsList}";
+                $availabilitySection .= "\nFollow the BOOKING LINK BEHAVIOR rules: ask if customer wants staff to handle booking, or prefers to book themselves via the link (if a BOOKING_URL exists).";
             } else {
-                $availabilitySection = "\n\nAVAILABILITY: No rooms available for the requested dates. Suggest other dates.";
+                $availabilitySection = "\n\nAVAILABILITY: No rooms available for requested dates. Suggest other dates.";
             }
         }
 
@@ -408,11 +423,11 @@ LANGUAGE RULE (ABSOLUTE PRIORITY - FOLLOW THIS ABOVE EVERYTHING ELSE):
 The customer just wrote: "{$customerMessage}"
 Detect the language of THIS message and reply ONLY in that exact language.
 Your ENTIRE response must be in the same language as the customer's message above.
-- If the message is in English → respond 100% in English
-- If the message is in Italian → respond 100% in Italian
-- If the message is in Albanian → respond 100% in Albanian
-- If the message is in any other language → respond in that language
-This rule overrides ALL other instructions and ANY Albanian text you see below.
+- English message → respond 100% in English
+- Italian message → respond 100% in Italian
+- Albanian message → respond 100% in Albanian
+- Any other language → respond in that language
+This rule overrides ALL other instructions and ANY Albanian text below.
 DO NOT use Albanian unless the customer's message above is written in Albanian.
 
 You are the virtual assistant of a group of properties in Shkodër, Albania.
@@ -424,14 +439,15 @@ AVAILABLE PROPERTIES (ordered by priority):
 
 BEHAVIOR:
 - Be concise — WhatsApp messages must be short
-- When customer asks about availability WITHOUT specifying a property:
+- When customer asks without specifying a property:
   * Briefly present all properties
-  * Ask about preferences (budget, type, number of guests, dates)
-  * Based on reply, suggest the most suitable property
-- When customer specifies a property or room, focus only on that one
-- ALWAYS include property name and room name in availability replies
+  * Ask about preferences (budget, type, guests, dates)
+  * Suggest the most suitable one
+- When customer specifies a property → focus only on that
 - First property in the list has highest priority
-- For final bookings, say that staff will contact them within 24 hours
+- When confirming availability, ask if customer wants to book
+- If yes → provide the BOOKING_URL for the chosen room (if available)
+- NEVER invent booking URLs
 PROMPT;
     }
 }
