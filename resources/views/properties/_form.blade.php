@@ -108,6 +108,26 @@
 </div>
 
 <hr>
+<h6 class="text-muted mb-3">Kontakti i Stafit</h6>
+
+<div class="row">
+    <div class="col-md-6 form-group">
+        <label>Email Kontakti</label>
+        <input type="email" name="contact_email" class="form-control"
+            value="{{ old('contact_email', $property->contact_email ?? '') }}"
+            placeholder="info@hotelrozafa.com">
+        <small class="text-muted">AI do ta japë këtë email klientëve kur nuk ka informacion ose kërkojnë kontakt me stafin.</small>
+    </div>
+    <div class="col-md-6 form-group">
+        <label>Telefon Kontakti</label>
+        <input type="text" name="contact_phone" class="form-control"
+            value="{{ old('contact_phone', $property->contact_phone ?? '') }}"
+            placeholder="+355 69 123 4567">
+        <small class="text-muted">Numri i telefonit që do i jepet klientit për kontakt direkt.</small>
+    </div>
+</div>
+
+<hr>
 <h6 class="text-muted mb-3">Të tjera</h6>
 
 <div class="form-group">

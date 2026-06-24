@@ -76,6 +76,8 @@ class PropertyController extends Controller
                 $request->boolean('whatsapp_enabled') ? 'required' : 'nullable',
             ],
             'booking_url'      => 'nullable|url|max:1000',
+            'contact_email'    => 'nullable|email|max:255',
+            'contact_phone'    => 'nullable|string|max:50',
             'ranking'          => 'nullable|integer|min:0',
         ]);
     }
